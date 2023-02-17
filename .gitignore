@@ -2,3 +2,4 @@
 .vscode/
 .ipynb_checkpoints/
 __pycache__/
+/modules/wave_example.py

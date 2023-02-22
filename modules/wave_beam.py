@@ -9,6 +9,7 @@ class WaveLong():
     E = 200e9
     vi = 0.25
     g = 9.81
+    _smoothing = 0.3 #[0, 1]
 
     def __init__(self, geometry,  T, dt, T_st=0, fi=0, mass_on=False, seal_move=0) -> None:
 
@@ -47,7 +48,7 @@ class WaveLong():
 
     def __f_mass(self, x, t):
 
-        stabil = 0.8*self.T_st
+        stabil = self._smoothing*self.T_st
         if stabil < 1e-10:
             coef = 1
         else:
@@ -104,6 +105,12 @@ class WaveLong():
     def grid_t(self):
         return self._tgrid
     
+    def set_smoothing(self, coef):
+        if coef > 1 or coef < 0:
+            print("No correct value: should in [0, 1]")
+            return 0
+        self._smoothing = coef
+    
 
 class WaveTang():
         
@@ -111,6 +118,7 @@ class WaveTang():
     E = 200e9
     vi = 0.25
     g = 9.81
+    _smoothing = 0.3 #[0, 1]
 
     def __init__(self, geometry,  T, dt, T_st=0, fi=0,  dx_user=None, mass_on=False, seal_move=0) -> None:
 
@@ -157,7 +165,7 @@ class WaveTang():
     
     def __f_mass(self, x, t):
 
-        stabil = 0.8*self.T_st
+        stabil = self._smoothing*self.T_st
         if stabil < 1e-10:
             coef = 1
         else:
@@ -348,145 +356,13 @@ class WaveTang():
     @property
     def grid_t(self):
         return self._t
+    
+    def set_smoothing(self, coef):    
+        if coef > 1 or coef < 0:
+            print("No correct value: should in [0, 1]")
+            return 0
+        self._smoothing = coef
       
-class WaveTang_0():
-    
-    rho = 7800
-    E = 200e9
-    vi = 0.25
-    g = 9.81
-    
-    def __init__(self, L, T, dt, F, S, J, u, p, f, C=0.75, dx_user=None):
-        
-        # --- Compute time and space mesh ---
-        self.Nt = int(round(T/dt))
-        self.t = np.linspace(0, self.Nt*dt, self.Nt+1)      # Mesh points in time
-        # --- Matrix for v(x, t) --
-        self.grid_v = []
-        # --- Find dx ---
-        
-        JF_max = max([J(x_)/F(x_) for x_ in np.linspace(0, L, 101)])
-        dx = dt*np.sqrt(self.E*JF_max/self.rho)/C
-        if isinstance(dx_user, (float, int)):
-            dx = dx_user #min(dx, dx_user)
-        self.Nx = int(round(L/dx))
-        self.x = np.linspace(0, L, self.Nx+1)          # Mesh points in space
-        # Make sure dx and dt are compatible with x and t
-        self.dx = self.x[1] - self.x[0]
-        self.dt = self.t[1] - self.t[0]
-        # Add geometry
-        self.F = F(self.x)
-        self.S = S(self.x)
-        self.J = J(self.x)
-        # Add function
-        self.fun_u = u
-        self.fun_p = p
-        self.fun_f = f
-    
-    def save_layer(self, v):
-        self.grid_v.append(v.copy())
-        
-    def init_condition(self, v_0 = None):
-        
-        if v_0 is None:
-            v_0 = np.zeros(self.Nx+1) 
-        elif v_0.shape[0] != self.x.shape[0]:
-            raise ValueError(f'different shape u0={v_0.shape[0]} and x={self.x.shape[0]}')
-        # --- Allocate memomry for solutions ---
-        self.v     = np.zeros(self.Nx+1)   # Solution array at new time level
-        self.v_n   = np.zeros(self.Nx+1)   # Solution at 1 time level back
-        self.v_nm1 = np.zeros(self.Nx+1)   # Solution at 2 time levels back
-
-        # --- Valid indices for space and time mesh ---
-        self.Ix = self.Nx+1
-        self.It = self.Nt+1
-
-        # --- Load initial condition into v_n and v_nm1 ---
-        self.v_n = v_0 + self.dt*self.fun_f(self.x, self.t[0])/2\
-                            /self.rho/self.F               
-        self.v_n[:2] = 0
-        self.v_nm1 = v_0
-        
-    def solver(self, max_iter=None):
-        
-        if not self.grid_v: 
-            self.grid_v = []
-            
-        # add to matrix init condition
-        self.save_layer(self.v_nm1)
-        self.save_layer(self.v_n)
-        
-        dx2, dt2 = self.dx**2, self.dt**2
-        du_dx = np.zeros_like(self.x)
-        # --- Time loop ---
-        It = self.It
-        if isinstance(max_iter, (int, float)):
-            It = min(max_iter, It)
-        for n in range(1, It-1):
-            u = self.fun_u(self.x, self.t[n])
-            p = self.fun_p(self.x, self.t[n]) 
-            f = self.fun_f(self.x, self.t[n])*dt2 + self.rho*self.F*\
-                    (2*self.v_n - self.v_nm1)
-            omega = self.E*self.F*self.du_dx(u, self.dx) - self.S*p
-            # --- solv x layer ---
-            self.v = self.solver_matrix(self.dx, dt2, self.Ix, self.J, omega, self.F, f, self.E, self.rho)
-            # save
-            self.save_layer(self.v)
-            # Update data structures for next step
-            self.v_nm1 = self.v_n
-            self.v_n = self.v
-            self.v = self.v_nm1 # ??
-           
-    @staticmethod
-    def solver_matrix(dx, dt2, Ix, J, Om, F, f, E, rho):
-        
-        dx2 = dx*dx
-        dx4 = dx**4
-        C1 = dt2/dx2
-        C2 = dt2/dx4
-        # empty layer
-        v_x = np.zeros(Ix)
-        # allocate memory for coefficients
-        a = np.zeros(Ix)
-        b = np.zeros(Ix)
-        c = np.zeros(Ix)
-        d = np.zeros(Ix)
-        e = np.zeros(Ix)
-        # calculate coefficients
-        a[2:] = C2*E*J[1:-1]
-        b[1:] = -C1*(2*E/dx2 * (J[1:]+J[:-1]) + 0.5*(Om[1:] + Om[:-1]))
-        c[1:-1] = rho*F[1:-1] + C1*0.5*(Om[0:-2] + 2*Om[1:-1] + Om[2:]) +\
-                    E*C2*(J[2:] + 4*J[1:-1] + J[0:-2])
-        d[:-1] = -C1*(2*E/dx2 * (J[1:]+J[:-1]) + 0.5*(Om[:-1] + Om[1:]))
-        e[:-2] = C2*E*J[1:-1]
-        # boundary condition for c[0]=0, c[I]
-        c[-1] = rho*F[-1] + C1*0.5*(Om[-2]+2*Om[-1]) + E*C2*(4*J[-1]+J[-2])
-        # --- calculate v_x ---
-        A = np.zeros((Ix-2, Ix))
-        for i in range(2,Ix-2):
-                A[i-2][i-2:i+3] = np.array([
-                        a[i], b[i], c[i], d[i], e[i]
-                    ])
-        A = np.delete(A,[0,1],1)
-        A[-2,-4:] = [-J[-2], (J[-1]+2*J[-2]), -(J[-2]+2*J[-1]), J[-1]]
-        A[-1,-3:] = [1, -2, 1]
-        f_new = f[2:]
-        f_new[-2:] = 0 
-        # solve equption
-        v_new = solve(A, f_new.reshape((f_new.shape[0],1)))
-        v_x[2:] = v_new.reshape(-1)
-        return v_x
-    
-    @staticmethod
-    def du_dx(u_x, dx):
-        dudx = np.zeros(u_x.shape[0]+2)
-        dudx[1:-1] = u_x
-        dudx[-1] = u_x[-1]
-        dudx = np.roll(dudx, -2) - dudx
-        return dudx[:-2]/2/dx
-    
-    def get_grid(self):
-        return np.array(self.grid_v)
 
 def find_A(u, x): 
     arr_u = []
